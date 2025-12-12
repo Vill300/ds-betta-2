@@ -1,0 +1,319 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model
+model User {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  username        String    @unique
+  displayName     String?
+  avatarUrl       String?
+  bio             String?
+  status          UserStatus @default(OFFLINE)
+  lastSeen        DateTime  @default(now())
+  emailVerified   Boolean   @default(false)
+  passwordHash    String?
+  
+  // OAuth fields
+  googleId        String?   @unique
+  githubId        String?   @unique
+  
+  // Relations
+  servers         ServerMember[]
+  messages        Message[]
+  dmParticipants  DMParticipant[]
+  userRoles       UserRole[]
+  notifications   Notification[]
+  sentMessages    Message[] @relation("MessageSender")
+  
+  // Audit
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("users")
+}
+
+enum UserStatus {
+  ONLINE
+  IDLE
+  DND
+  OFFLINE
+}
+
+// Server model
+model Server {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  iconUrl     String?
+  ownerId     String
+  
+  // Relations
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  members     ServerMember[]
+  channels    Channel[]
+  roles       Role[]
+  invites     ServerInvite[]
+  
+  // Audit
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("servers")
+}
+
+// Server member relationship
+model ServerMember {
+  id         String @id @default(uuid())
+  userId     String
+  serverId   String
+  nickname   String?
+  mute       Boolean @default(false)
+  deaf       Boolean @default(false)
+  
+  user       User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  server     Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  userRoles  UserRole[]
+  
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([userId, serverId])
+  @@map("server_members")
+}
+
+// Channel model
+model Channel {
+  id          String      @id @default(uuid())
+  serverId    String?
+  name        String
+  type        ChannelType @default(TEXT)
+  position    Int
+  topic       String?
+  parentId    String?
+  isPrivate   Boolean     @default(false)
+  
+  // Relations
+  server      Server?     @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  parent      Channel?    @relation("ChannelHierarchy", fields: [parentId], references: [id])
+  children    Channel[]   @relation("ChannelHierarchy")
+  messages    Message[]
+  
+  // Audit
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@map("channels")
+}
+
+enum ChannelType {
+  TEXT
+  VOICE
+  CATEGORY
+}
+
+// Message model
+model Message {
+  id          String      @id @default(uuid())
+  channelId   String
+  userId      String
+  content     String
+  type        MessageType @default(TEXT)
+  replyTo     String?
+  pinned      Boolean     @default(false)
+  editedAt    DateTime?
+  
+  // Relations
+  channel     Channel     @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  sender      User        @relation("MessageSender", fields: [userId], references: [id], onDelete: Cascade)
+  replyToMsg  Message?    @relation("MessageReplies", fields: [replyTo], references: [id])
+  replies     Message[]   @relation("MessageReplies")
+  attachments Attachment[]
+  
+  // Audit
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@map("messages")
+}
+
+enum MessageType {
+  TEXT
+  FILE
+  EMBED
+  SYSTEM
+}
+
+// Attachment model
+model Attachment {
+  id           String   @id @default(uuid())
+  messageId    String
+  filename     String
+  originalName String
+  mimeType     String
+  size         Int
+  url          String
+  
+  message      Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+
+  @@map("attachments")
+}
+
+// Direct Message models
+model DMConversation {
+  id          String           @id @default(uuid())
+  createdAt   DateTime         @default(now())
+  
+  participants DMParticipant[]
+  messages     Message[]
+  
+  @@map("dm_conversations")
+}
+
+model DMParticipant {
+  conversationId String
+  userId         String
+  
+  conversation   DMConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt      DateTime       @default(now())
+
+  @@id([conversationId, userId])
+  @@map("dm_participants")
+}
+
+// Role model
+model Role {
+  id           String   @id @default(uuid())
+  serverId     String
+  name         String
+  color        String?
+  permissions  Json     // Store as JSON array
+  position     Int
+  hoist        Boolean  @default(false)
+  mentionable  Boolean  @default(false)
+  
+  server       Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  userRoles    UserRole[]
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([serverId, name])
+  @@map("roles")
+}
+
+// User role relationship
+model UserRole {
+  userId     String
+  roleId     String
+  serverId   String
+  
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role       Role         @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  server     ServerMember @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  
+  createdAt  DateTime     @default(now())
+
+  @@id([userId, roleId, serverId])
+  @@map("user_roles")
+}
+
+// Server invite model
+model ServerInvite {
+  id          String   @id @default(uuid())
+  serverId    String
+  code        String   @unique
+  maxUses     Int?
+  uses        Int      @default(0)
+  expiresAt   DateTime?
+  inviterId   String
+  
+  server      Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime @default(now())
+
+  @@map("server_invites")
+}
+
+// Notification model
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  data      Json?            // Additional notification data
+  read      Boolean          @default(false)
+  
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime         @default(now())
+
+  @@map("notifications")
+}
+
+enum NotificationType {
+  MESSAGE
+  MENTION
+  FRIEND_REQUEST
+  SERVER_INVITE
+}
+
+// WebSocket session model
+model UserSession {
+  id          String   @id @default(uuid())
+  userId      String
+  socketId    String
+  serverId    String?
+  channelId   String?
+  connectedAt DateTime @default(now())
+  lastSeen    DateTime @default(now())
+  
+  @@unique([userId, socketId])
+  @@map("user_sessions")
+}
+
+// Moderation models
+model ModerationLog {
+  id          String           @id @default(uuid())
+  serverId    String
+  moderatorId String
+  targetId    String?
+  action      ModerationAction
+  reason      String?
+  duration    Int?             // Duration in minutes
+  evidence    String?
+  
+  createdAt   DateTime         @default(now())
+
+  @@map("moderation_logs")
+}
+
+enum ModerationAction {
+  KICK
+  BAN
+  UNBAN
+  MUTE
+  UNMUTE
+  WARN
+  DELETE_MESSAGE
+  DELETE_CHANNEL
+}
+
+// Indexes for performance
+// Note: These will be added via migration or direct SQL execution
+// @@index([channelId, createdAt])
+// @@index([userId])
+// @@index([serverId])
+// @@index([createdAt])
